@@ -8,6 +8,42 @@ const stamp = message => JSON.stringify([
 ]);
 const chatKey = c => JSON.stringify([c.groupId ?? null, c.characterId ?? null, c.chatId]);
 
+// Original 24px SVG artwork approved for Range Summary. Embedded to avoid asset requests.
+const ACTION_ICON_PATHS = {
+    start: [
+        { d: 'M5.5 20V4.5' },
+        { d: 'M5.5 5c4-3 8 3 12 0v9c-4 3-8-3-12 0Z', fill: 'currentColor', 'fill-opacity': '.12' },
+        { d: 'M11.5 19h7m-2.5-2.5 2.5 2.5-2.5 2.5' },
+    ],
+    end: [
+        { d: 'M5.5 20V4.5' },
+        { d: 'M5.5 5c4-3 8 3 12 0v9c-4 3-8-3-12 0Z', fill: 'currentColor', 'fill-opacity': '.12' },
+        { d: 'M9.5 4.7v9m4-7.4v9M5.5 9.5c4-3 8 3 12 0', 'stroke-width': '1.25' },
+        { d: 'M5.5 5c1.4-1.05 2.7-1 4-.3v4.5c-1.3-.7-2.6-.75-4 .3Zm8 1.3c1.3.7 2.6.75 4-.3v4.5c-1.4 1.05-2.7 1-4 .3ZM9.5 9.2c1.3.7 2.7 1.4 4 1.6v4.5c-1.3-.2-2.7-.9-4-1.6Z', fill: 'currentColor', stroke: 'none', 'fill-opacity': '.65' },
+        { d: 'M12 20h6.5m0-2v4' },
+    ],
+    summary: [
+        { d: 'M13 3.5H6.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V12', fill: 'currentColor', 'fill-opacity': '.1' },
+        { d: 'M8.5 10.5h3m-3 4h7m-7 3.5h5' },
+        { d: 'm18.5 2 .9 3.1L22.5 6l-3.1.9-.9 3.1-.9-3.1-3.1-.9 3.1-.9Z', fill: 'currentColor', 'fill-opacity': '.18' },
+    ],
+};
+
+function actionIcon(doc, action) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = doc.createElementNS(ns, 'svg');
+    const attrs = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+        'aria-hidden': 'true', focusable: 'false', class: 'mrs-icon' };
+    for (const [key, value] of Object.entries(attrs)) svg.setAttribute(key, value);
+    for (const attrs of ACTION_ICON_PATHS[action]) {
+        const path = doc.createElementNS(ns, 'path');
+        for (const [key, value] of Object.entries(attrs)) path.setAttribute(key, value);
+        svg.append(path);
+    }
+    return svg;
+}
+
 export function serializeRange(chat, start, end) {
     return chat.slice(start, end + 1).map((m, offset) =>
         `[Сообщение #${start + offset}; роль: ${m.is_user ? 'пользователь' : 'персонаж/служебное'}; имя: ${JSON.stringify(m.name ?? '')}; метка отправки: ${JSON.stringify(m.send_date ?? '')}]\n${m.mes ?? ''}\n\n`,
@@ -317,12 +353,13 @@ export function mountUI(context, engine, run, doc = document) {
                 if (!panel) return;
                 buttons = doc.createElement('span');
                 buttons.className = 'mrs-buttons';
-                for (const [action, title, icon] of [['start', 'Начало', 'fa-flag'], ['end', 'Конец', 'fa-flag-checkered'], ['summary', 'Сводка', 'fa-file-lines']]) {
+                for (const [action, title] of [['start', 'Начало'], ['end', 'Конец'], ['summary', 'Сводка']]) {
                     const button = doc.createElement('button');
-                    button.type = 'button'; button.className = `mes_button mrs-button fa-solid ${icon}`;
+                    button.type = 'button'; button.className = 'mes_button mrs-button';
                     button.dataset.mrsAction = action; button.dataset.mrsLabel = title;
                     button.setAttribute('aria-label', title);
                     button.title = `${title}: сообщение #${index}`;
+                    button.append(actionIcon(doc, action));
                     buttons.append(button);
                 }
                 panel.append(buttons);
