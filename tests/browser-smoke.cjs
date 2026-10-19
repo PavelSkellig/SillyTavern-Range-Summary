@@ -88,6 +88,16 @@ const server = http.createServer(async (req, res) => {
                 if (!await message.locator('.extraMesButtons').isVisible()) await message.locator('.extraMesButtonsHint').click();
                 await message.locator('[data-mrs-action="' + action + '"]').click();
             }
+            await page.locator('.mes[mesid="0"] .extraMesButtonsHint').click();
+            const iconButtons = page.locator('.mes[mesid="0"] .mrs-buttons button');
+            assert.equal(await iconButtons.locator('svg').count(), 3, 'approved custom SVGs replace font icons');
+            assert.ok(await iconButtons.evaluateAll(nodes => nodes.every(button => {
+                const svg = button.querySelector('svg');
+                return button.getAttribute('aria-label') && svg.namespaceURI === 'http://www.w3.org/2000/svg'
+                    && svg.getAttribute('aria-hidden') === 'true' && svg.getAttribute('viewBox') === '0 0 24 24'
+                    && !button.classList.contains('fa-solid');
+            })));
+            await page.click('#mrs-prompt');
             await page.fill('#mrs-prompt', '  Rules {{char}}\n');
             await messageAction(1, 'start');
             await messageAction(2, 'end');
@@ -114,6 +124,15 @@ const server = http.createServer(async (req, res) => {
                     document.body.style.setProperty('--SmartThemeBodyColor', light ? '#111' : '#eee');
                 }, light);
                 assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+                const iconStyle = await page.locator('.mes[mesid="2"] .mrs-button svg').first().evaluate(svg => ({
+                    stroke: getComputedStyle(svg).stroke,
+                    buttonColor: getComputedStyle(svg.parentElement).color,
+                    width: svg.getBoundingClientRect().width,
+                    height: svg.getBoundingClientRect().height,
+                }));
+                assert.equal(iconStyle.stroke, iconStyle.buttonColor, 'SVG follows the actual theme colour');
+                assert.equal(iconStyle.width, 18);
+                assert.equal(iconStyle.height, 18);
             }
             const buttons = await page.locator('.mes[mesid="2"] .mrs-buttons button').evaluateAll(nodes => nodes.map(n => ({ w:n.getBoundingClientRect().width,h:n.getBoundingClientRect().height })));
             assert.ok(buttons.every(r => r.w >= 28 && r.h >= (width < 500 ? 36 : 28)));
