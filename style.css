@@ -1,0 +1,50 @@
+.mrs-buttons {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    vertical-align: middle;
+    flex: 0 0 100%;
+    justify-content: flex-end;
+}
+.mes_buttons.mrs-actions { flex-wrap: wrap; max-width: 100%; }
+.mrs-buttons .mrs-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    min-width: 54px;
+    margin: 0;
+    padding: 4px 7px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--SmartThemeBodyColor, currentColor);
+    touch-action: manipulation;
+    cursor: pointer;
+}
+.mrs-button[aria-pressed="true"] {
+    outline: 2px solid var(--SmartThemeQuoteColor, currentColor);
+    outline-offset: -2px;
+    font-weight: bold;
+}
+.mes.mrs-start .mes_text,
+.mes.mrs-end .mes_text {
+    box-shadow: inset 3px 0 var(--SmartThemeQuoteColor, currentColor);
+    padding-inline-start: 8px;
+}
+#mrs-settings .inline-drawer-content { padding: 8px 0; }
+#mrs-prompt {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 210px;
+    resize: vertical;
+    font-size: 16px;
+    white-space: pre-wrap;
+}
+#mrs-range, #mrs-status { display: block; margin-block: 8px; overflow-wrap: anywhere; }
+#mrs-settings button { white-space: normal; }
+#mrs-settings button:disabled, .mrs-button:disabled { opacity: .55; cursor: wait; }
+@media (pointer: coarse) {
+    .mrs-buttons .mrs-button { min-height: 44px; }
+}

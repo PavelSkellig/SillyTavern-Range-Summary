@@ -1,0 +1,13 @@
+{
+  "display_name": "Сводка диапазона / Range Summary",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Range Summary contributors",
+  "version": "1.0.0",
+  "homePage": "https://github.com/PavelSkellig/SillyTavern-Range-Summary",
+  "minimum_client_version": "1.19.0",
+  "auto_update": false
+}
