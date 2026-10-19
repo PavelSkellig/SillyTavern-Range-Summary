@@ -269,7 +269,7 @@ export function createHost(context, core, chats, fetcher = globalThis.fetch) {
     };
 }
 
-/** Minimal UI: three controls in each native message action panel, one settings drawer. */
+/** Three compact controls inside the native ellipsis menu; one settings drawer. */
 export function mountUI(context, engine, run, doc = document) {
     const settings = () => context().extensionSettings[KEY] ??= { prompt: '' };
     const drawer = doc.createElement('div');
@@ -313,15 +313,15 @@ export function mountUI(context, engine, run, doc = document) {
             if (!m) return;
             let buttons = el.querySelector('.mrs-buttons');
             if (!buttons) {
-                const panel = el.querySelector('.mes_buttons');
+                const panel = el.querySelector('.extraMesButtons');
                 if (!panel) return;
-                panel.classList.add('mrs-actions');
                 buttons = doc.createElement('span');
                 buttons.className = 'mrs-buttons';
-                for (const [action, title] of [['start', 'Начало'], ['end', 'Конец'], ['summary', 'Сводка']]) {
+                for (const [action, title, icon] of [['start', 'Начало', 'fa-flag'], ['end', 'Конец', 'fa-flag-checkered'], ['summary', 'Сводка', 'fa-file-lines']]) {
                     const button = doc.createElement('button');
-                    button.type = 'button'; button.className = 'menu_button mrs-button';
-                    button.dataset.mrsAction = action; button.textContent = title;
+                    button.type = 'button'; button.className = `mes_button mrs-button fa-solid ${icon}`;
+                    button.dataset.mrsAction = action; button.dataset.mrsLabel = title;
+                    button.setAttribute('aria-label', title);
                     button.title = `${title}: сообщение #${index}`;
                     buttons.append(button);
                 }
@@ -333,7 +333,7 @@ export function mountUI(context, engine, run, doc = document) {
             for (const button of buttons.querySelectorAll('button')) {
                 button.disabled = engine.busy;
                 const action = button.dataset.mrsAction;
-                button.title = `${button.textContent}: сообщение #${index}`;
+                button.title = `${button.dataset.mrsLabel}: сообщение #${index}`;
                 if (action !== 'summary') button.setAttribute('aria-pressed', String(action === 'start' ? start : end));
             }
         });

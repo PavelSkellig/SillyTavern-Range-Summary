@@ -1,23 +1,23 @@
 .mrs-buttons {
     display: inline-flex;
-    flex-wrap: wrap;
-    gap: 4px;
+    flex-wrap: nowrap;
+    gap: 2px;
     align-items: center;
     vertical-align: middle;
-    flex: 0 0 100%;
-    justify-content: flex-end;
+    flex: 0 0 auto;
 }
-.mes_buttons.mrs-actions { flex-wrap: wrap; max-width: 100%; }
 .mrs-buttons .mrs-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 36px;
-    min-width: 54px;
+    min-height: 28px;
+    min-width: 28px;
     margin: 0;
-    padding: 4px 7px;
-    font: inherit;
-    font-size: 12px;
+    padding: 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    font-size: inherit;
     line-height: 1.2;
     color: var(--SmartThemeBodyColor, currentColor);
     touch-action: manipulation;
@@ -46,5 +46,5 @@
 #mrs-settings button { white-space: normal; }
 #mrs-settings button:disabled, .mrs-button:disabled { opacity: .55; cursor: wait; }
 @media (pointer: coarse) {
-    .mrs-buttons .mrs-button { min-height: 44px; }
+    .mrs-buttons .mrs-button { min-height: 36px; min-width: 36px; }
 }
