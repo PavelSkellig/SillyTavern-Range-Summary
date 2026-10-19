@@ -14,6 +14,7 @@ const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
 body{margin:0;font:16px sans-serif;background:var(--bg,#222);color:var(--SmartThemeBodyColor,#eee)}
 #chat,#extensions_settings2{max-width:600px;margin:auto;padding:8px;box-sizing:border-box}
 .mes{padding:8px;margin:4px 0;border:1px solid #888}.mes_buttons{display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:3px}.native-action{flex:none;width:24px}
+.extraMesButtons{display:none;flex-wrap:wrap;align-items:center;gap:3px}.mes_button{border:0;background:transparent;color:inherit;font-size:16px}
 .menu_button,.text_pole{border:1px solid #888;border-radius:5px;background:var(--bg,#222);color:inherit}
 .menu_button{padding:4px}.text_pole{font:inherit}.inline-drawer-content{display:block}
 </style><link rel="stylesheet" href="/style.css"><div id="extensions_settings2"></div><div id="chat"></div>
@@ -41,11 +42,12 @@ const c=window.testContext={
  deactivateSendButtons(){document.body.dataset.generating='true'},
  activateSendButtons(){window.generating=false;delete document.body.dataset.generating},
  swipe:{refresh(){}},
- addOneMessage(m){const el=document.createElement('div');el.className='mes';el.setAttribute('mesid',c.chat.indexOf(m));el.setAttribute('is_system',String(m.is_system));const text=document.createElement('div');text.className='mes_text';text.textContent=m.mes;el.append(text);const actions=document.createElement('div');actions.className='mes_buttons';el.append(actions);document.querySelector('#chat').append(el)},
+ addOneMessage(m){const el=document.createElement('div');el.className='mes';el.setAttribute('mesid',c.chat.indexOf(m));el.setAttribute('is_system',String(m.is_system));const text=document.createElement('div');text.className='mes_text';text.textContent=m.mes;el.append(text);const actions=document.createElement('div');actions.className='mes_buttons';const hint=document.createElement('button');hint.className='mes_button extraMesButtonsHint';hint.textContent='…';hint.setAttribute('aria-label','Действия сообщения');const extra=document.createElement('div');extra.className='extraMesButtons';actions.append(hint,extra);el.append(actions);document.querySelector('#chat').append(el)},
  async generateRawData({prompt}){const payload={chat:prompt};await eventSource.emit('CHAT_COMPLETION_PROMPT_READY',payload);requests.push(payload.chat);await new Promise(r=>setTimeout(r,80));return {choices:[{message:{content:'Detailed summary {{char}}'},finish_reason:'stop'}]}}
 };
 for(const m of c.chat)c.addOneMessage(m);
-for(const panel of document.querySelectorAll('.mes_buttons'))for(let i=0;i<6;i++){const icon=document.createElement('span');icon.className='native-action';icon.textContent='⋮';panel.append(icon)}
+for(const panel of document.querySelectorAll('.extraMesButtons'))for(let i=0;i<6;i++){const icon=document.createElement('span');icon.className='native-action';icon.textContent='⋮';panel.append(icon)}
+document.addEventListener('click',event=>{const hint=event.target.closest('.extraMesButtonsHint');if(hint){const panel=hint.parentElement.querySelector('.extraMesButtons');panel.style.display='flex';panel.classList.add('visible');hint.style.display='none'}else if(!event.target.closest('.extraMesButtons')){for(const panel of document.querySelectorAll('.extraMesButtons.visible')){panel.style.display='none';panel.classList.remove('visible');panel.parentElement.querySelector('.extraMesButtonsHint').style.display=''}}});
 window.SillyTavern={getContext:()=>c};window.toastr={error:console.error,warning:console.warn};
 </script><script type="module" src="/index.js"></script>`;
 const server = http.createServer(async (req, res) => {
@@ -76,25 +78,33 @@ const server = http.createServer(async (req, res) => {
             const page = await context.newPage();
             const errors = []; page.on('pageerror', e => errors.push(e.message));
             await page.goto('http://127.0.0.1:' + server.address().port);
-            await page.waitForSelector('.mrs-buttons');
+            await page.waitForSelector('.mrs-buttons', { state: 'attached' });
             assert.equal(await page.locator('.mrs-buttons button').count(), 12);
+            assert.equal(await page.locator('.mes_buttons > .mrs-buttons').count(), 0, 'actions must be inside the native ellipsis menu');
+            assert.equal(await page.locator('.extraMesButtons .mrs-buttons').count(), 4);
+            assert.equal(await page.locator('[data-mrs-action="start"]').first().isVisible(), false, 'actions must be hidden before opening the native menu');
+            async function messageAction(index, action) {
+                const message = page.locator('.mes[mesid="' + index + '"]');
+                if (!await message.locator('.extraMesButtons').isVisible()) await message.locator('.extraMesButtonsHint').click();
+                await message.locator('[data-mrs-action="' + action + '"]').click();
+            }
             await page.fill('#mrs-prompt', '  Rules {{char}}\n');
-            await page.locator('.mes[mesid="1"] [data-mrs-action="start"]').click();
-            await page.locator('.mes[mesid="2"] [data-mrs-action="end"]').click();
-            await page.locator('.mes[mesid="2"] [data-mrs-action="summary"]').click();
+            await messageAction(1, 'start');
+            await messageAction(2, 'end');
+            await messageAction(2, 'summary');
             await page.waitForFunction(() => window.testContext.chat.length === 5 && !window.generating);
             assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [true, true, true, false, true]);
             assert.equal(await page.evaluate(() => requests[0][0].content), '  Rules {{char}}\n');
             assert.ok((await page.evaluate(() => requests[0][1].content)).includes('selected {{char}}'));
             assert.ok(!(await page.evaluate(() => requests[0][1].content)).includes('old outside'));
             assert.equal(await page.locator('.mrs-buttons button').count(), 15);
-            await page.locator('.mes[mesid="2"] [data-mrs-action="summary"]').click();
+            await messageAction(2, 'summary');
             await page.waitForFunction(() => !window.generating);
             assert.equal(await page.evaluate(() => requests.length), 1);
             await page.click('#mrs-restore');
             await page.waitForFunction(() => !window.generating);
             assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [false, false, false, false, true]);
-            await page.locator('.mes[mesid="2"] [data-mrs-action="summary"]').click();
+            await messageAction(2, 'summary');
             await page.waitForFunction(() => !window.generating);
             assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [true, true, true, false, true]);
             assert.equal(await page.evaluate(() => requests.length), 1);
@@ -105,9 +115,9 @@ const server = http.createServer(async (req, res) => {
                 }, light);
                 assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
             }
-            const buttons = await page.locator('.mrs-buttons button').evaluateAll(nodes => nodes.map(n => ({ w:n.getBoundingClientRect().width,h:n.getBoundingClientRect().height })));
-            assert.ok(buttons.every(r => r.w >= 54 && r.h >= (width < 500 ? 44 : 36)));
-            for (const row of await page.locator('.mrs-buttons').all()) {
+            const buttons = await page.locator('.mes[mesid="2"] .mrs-buttons button').evaluateAll(nodes => nodes.map(n => ({ w:n.getBoundingClientRect().width,h:n.getBoundingClientRect().height })));
+            assert.ok(buttons.every(r => r.w >= 28 && r.h >= (width < 500 ? 36 : 28)));
+            for (const row of await page.locator('.mes[mesid="2"] .mrs-buttons').all()) {
                 const tops = await row.locator('button').evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().top));
                 assert.ok(tops.every(top => Math.abs(top - tops[0]) < 1), 'three buttons should fit on a single row');
             }
@@ -119,7 +129,7 @@ const server = http.createServer(async (req, res) => {
             await page.waitForSelector('#mrs-prompt');
             assert.equal(await page.inputValue('#mrs-prompt'), '  Rules {{char}}\n');
             assert.deepEqual(errors, []);
-            console.log('PASS browser UI ' + width + 'px: flow, literal prompt, restore, duplicate guard, lazy messages, themes, touch targets, settings reload');
+            console.log('PASS browser UI ' + width + 'px: native ellipsis menu, hidden compact actions, flow, restore, duplicates, lazy messages, themes, settings reload');
             await context.close();
         }
     } finally { await browser.close(); }
