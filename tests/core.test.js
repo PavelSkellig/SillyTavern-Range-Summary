@@ -1,8 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SummaryEngine, serializeRange, splitText } from '../index.js';
+import { SummaryEngine, serializeRange, splitText, summaryForCopy } from '../index.js';
 
 const KEY = 'manual_range_summary';
+
+test('copy returns complete literal summary body without the generated range header', () => {
+    const body = '  **Хронология**\n02.07.1996 — 14:10\n{{char}} 🙂\n\n';
+    const message = { mes: 'Сводка · сообщения #1–#2 (включительно)\n\n' + body,
+        extra: { [KEY]: { kind: 'summary', start: 1, end: 2 } } };
+    assert.equal(summaryForCopy(message), body);
+    message.mes = 'Edited summary without service header\n';
+    assert.equal(summaryForCopy(message), 'Edited summary without service header\n');
+});
+
+test('copy cannot silently copy an ordinary message as a summary', () => {
+    assert.throws(() => summaryForCopy({ mes: 'roleplay' }), /сводк/i);
+});
 function fixture() {
     let context = {
         chatId: 'chat-A', characterId: 0, groupId: null,

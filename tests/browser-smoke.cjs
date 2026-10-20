@@ -74,7 +74,7 @@ const server = http.createServer(async (req, res) => {
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
     try {
         for (const width of [320, 390, 1280]) {
-            const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: width < 500, hasTouch: width < 500 });
+            const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'], viewport: { width, height: 844 }, isMobile: width < 500, hasTouch: width < 500 });
             const page = await context.newPage();
             const errors = []; page.on('pageerror', e => errors.push(e.message));
             await page.goto('http://127.0.0.1:' + server.address().port);
@@ -107,7 +107,26 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.evaluate(() => requests[0][0].content), '  Rules {{char}}\n');
             assert.ok((await page.evaluate(() => requests[0][1].content)).includes('selected {{char}}'));
             assert.ok(!(await page.evaluate(() => requests[0][1].content)).includes('old outside'));
-            assert.equal(await page.locator('.mrs-buttons button').count(), 15);
+            assert.equal(await page.locator('.mrs-buttons button').count(), 16);
+            const summaryMessage = page.locator('.mes[mesid="4"]');
+            const copyButton = summaryMessage.locator('.mrs-copy-button');
+            assert.equal(await copyButton.isVisible(), true, 'copy is directly visible without opening the ellipsis menu');
+            assert.equal(await page.locator('.mes:not([mesid="4"]) .mrs-copy-button').count(), 0);
+            const summaryBeforeCopy = await page.evaluate(() => JSON.stringify(testContext.chat));
+            await copyButton.click();
+            await page.waitForFunction(() => document.querySelector('.mrs-copy-button .mrs-copy-label')?.textContent === 'Скопировано');
+            assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'Detailed summary {{char}}');
+            assert.equal(await page.evaluate(() => JSON.stringify(testContext.chat)), summaryBeforeCopy);
+            await page.evaluate(() => {
+                window.realClipboard = navigator.clipboard;
+                Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+                testContext.chat[4].mes = 'Сводка · сообщения #1–#2 (включительно)\n\nFallback summary 🙂';
+            });
+            await copyButton.click();
+            await page.waitForFunction(() => document.querySelector('.mrs-copy-button .mrs-copy-label')?.textContent === 'Скопировано');
+            assert.equal(await page.evaluate(() => realClipboard.readText()), 'Fallback summary 🙂');
+            assert.equal(await page.locator('.mrs-clipboard-buffer').count(), 0, 'fallback textarea is cleaned up');
+            await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClipboard }); testContext.chat[4].mes = 'Сводка · сообщения #1–#2 (включительно)\n\nDetailed summary {{char}}'; });
             await messageAction(2, 'summary');
             await page.waitForFunction(() => !window.generating);
             assert.equal(await page.evaluate(() => requests.length), 1);
