@@ -8,24 +8,62 @@ const stamp = message => JSON.stringify([
 ]);
 const chatKey = c => JSON.stringify([c.groupId ?? null, c.characterId ?? null, c.chatId]);
 
+export function summaryForCopy(message) {
+    if (!message || !isSummary(message)) throw Error('Это сообщение не является сводкой расширения.');
+    const meta = message.extra[KEY];
+    const text = String(message.mes ?? '');
+    const header = `Сводка · сообщения #${meta.start}–#${meta.end} (включительно)\n\n`;
+    return text.startsWith(header) ? text.slice(header.length) : text;
+}
+
+async function writeClipboard(text, doc) {
+    const clipboard = doc.defaultView.navigator.clipboard;
+    if (clipboard?.writeText) {
+        // Call immediately inside the trusted click handler (required by mobile Safari).
+        try { await clipboard.writeText(text); return; } catch { /* Try the legacy path too. */ }
+    }
+    const active = doc.activeElement;
+    const selection = doc.getSelection();
+    const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+    const inputSelection = active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+    const buffer = doc.createElement('textarea');
+    buffer.className = 'mrs-clipboard-buffer';
+    buffer.value = text; buffer.readOnly = true; buffer.tabIndex = -1;
+    buffer.setAttribute('aria-hidden', 'true');
+    buffer.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;';
+    (doc.querySelector('dialog[open]:last-of-type') ?? doc.body).append(buffer);
+    try {
+        buffer.focus({ preventScroll: true }); buffer.select(); buffer.setSelectionRange(0, text.length);
+        if (!doc.execCommand('copy')) throw Error('Браузер не разрешил копирование. Проверьте доступ к буферу обмена.');
+    } finally {
+        buffer.remove();
+        if (active?.isConnected) {
+            active.focus({ preventScroll: true });
+            if (inputSelection) active.setSelectionRange(...inputSelection);
+        }
+        if (selection) { selection.removeAllRanges(); for (const range of ranges) selection.addRange(range); }
+    }
+}
+
 // Original 24px SVG artwork approved for Range Summary. Embedded to avoid asset requests.
 const ACTION_ICON_PATHS = {
     start: [
-        { d: 'M5.5 20V4.5' },
-        { d: 'M5.5 5c4-3 8 3 12 0v9c-4 3-8-3-12 0Z', fill: 'currentColor', 'fill-opacity': '.12' },
-        { d: 'M11.5 19h7m-2.5-2.5 2.5 2.5-2.5 2.5' },
+        { d: 'M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16l-6-4Z' },
+        { d: 'M9 9h6m-3-3v6' },
     ],
     end: [
-        { d: 'M5.5 20V4.5' },
-        { d: 'M5.5 5c4-3 8 3 12 0v9c-4 3-8-3-12 0Z', fill: 'currentColor', 'fill-opacity': '.12' },
-        { d: 'M9.5 4.7v9m4-7.4v9M5.5 9.5c4-3 8 3 12 0', 'stroke-width': '1.25' },
-        { d: 'M5.5 5c1.4-1.05 2.7-1 4-.3v4.5c-1.3-.7-2.6-.75-4 .3Zm8 1.3c1.3.7 2.6.75 4-.3v4.5c-1.4 1.05-2.7 1-4 .3ZM9.5 9.2c1.3.7 2.7 1.4 4 1.6v4.5c-1.3-.2-2.7-.9-4-1.6Z', fill: 'currentColor', stroke: 'none', 'fill-opacity': '.65' },
-        { d: 'M12 20h6.5m0-2v4' },
+        { d: 'M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16l-6-4Z' },
+        { d: 'm9 9 2 2 4-4' },
     ],
     summary: [
-        { d: 'M13 3.5H6.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V12', fill: 'currentColor', 'fill-opacity': '.1' },
-        { d: 'M8.5 10.5h3m-3 4h7m-7 3.5h5' },
-        { d: 'm18.5 2 .9 3.1L22.5 6l-3.1.9-.9 3.1-.9-3.1-3.1-.9 3.1-.9Z', fill: 'currentColor', 'fill-opacity': '.18' },
+        { d: 'M8 3a3 3 0 0 0-3 3v2h5V6a3 3 0 0 0-6 0' },
+        { d: 'M7 3h10a3 3 0 0 1 3 3v12' },
+        { d: 'M10 8v10a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3H13v1a2 2 0 0 1-2 2' },
+        { d: 'M13 8h4m-4 4h4' },
+    ],
+    copy: [
+        { d: 'M8 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1M8 3h8' },
+        { d: 'M10 7h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z' },
     ],
 };
 
@@ -364,14 +402,40 @@ export function mountUI(context, engine, run, doc = document) {
                 }
                 panel.append(buttons);
             }
+            let menuCopy = buttons.querySelector('[data-mrs-action="copy"]');
+            let footer = el.querySelector('.mrs-copy-footer');
+            if (isSummary(m)) {
+                if (!menuCopy) {
+                    menuCopy = doc.createElement('button');
+                    menuCopy.type = 'button'; menuCopy.className = 'mes_button mrs-button';
+                    menuCopy.dataset.mrsAction = 'copy'; menuCopy.dataset.mrsLabel = 'Копировать';
+                    menuCopy.setAttribute('aria-label', 'Копировать сводку');
+                    menuCopy.append(actionIcon(doc, 'copy')); buttons.append(menuCopy);
+                }
+                if (!footer) {
+                    const text = el.querySelector('.mes_text');
+                    if (text) {
+                        footer = doc.createElement('div'); footer.className = 'mrs-copy-footer';
+                        const copy = doc.createElement('button');
+                        copy.type = 'button'; copy.className = 'menu_button mrs-copy-button';
+                        copy.dataset.mrsAction = 'copy'; copy.setAttribute('aria-label', 'Копировать сводку');
+                        copy.append(actionIcon(doc, 'copy'));
+                        const label = doc.createElement('span'); label.className = 'mrs-copy-label'; label.textContent = 'Копировать';
+                        copy.append(label); footer.append(copy);
+                        const feedback = doc.createElement('span'); feedback.className = 'mrs-copy-feedback';
+                        feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
+                        footer.append(feedback); text.after(footer);
+                    }
+                }
+            } else { menuCopy?.remove(); footer?.remove(); }
             const id = m.extra?.[KEY]?.id;
             const start = !!id && selection.start === id, end = !!id && selection.end === id;
             el.classList.toggle('mrs-start', start); el.classList.toggle('mrs-end', end);
             for (const button of buttons.querySelectorAll('button')) {
-                button.disabled = engine.busy;
                 const action = button.dataset.mrsAction;
+                button.disabled = engine.busy && action !== 'copy';
                 button.title = `${button.dataset.mrsLabel}: сообщение #${index}`;
-                if (action !== 'summary') button.setAttribute('aria-pressed', String(action === 'start' ? start : end));
+                if (action === 'start' || action === 'end') button.setAttribute('aria-pressed', String(action === 'start' ? start : end));
             }
         });
     }
@@ -397,7 +461,25 @@ export function mountUI(context, engine, run, doc = document) {
         event.preventDefault(); event.stopPropagation();
         const index = Number(button.closest('.mes').getAttribute('mesid'));
         const action = button.dataset.mrsAction;
-        if (action === 'summary') await run(() => engine.summarize(settings().prompt));
+        if (action === 'copy') {
+            const messageElement = button.closest('.mes');
+            const label = messageElement.querySelector('.mrs-copy-label');
+            const feedback = messageElement.querySelector('.mrs-copy-feedback');
+            button.disabled = true;
+            try {
+                const text = summaryForCopy(context().chat[index]);
+                if (!text) throw Error('Сводка пуста.');
+                if (label) label.textContent = 'Копирование…';
+                if (feedback) feedback.textContent = '';
+                await writeClipboard(text, doc);
+                if (label) label.textContent = 'Скопировано';
+                if (feedback) feedback.textContent = 'Сводка в буфере обмена';
+            } catch (error) {
+                if (label) label.textContent = 'Копировать';
+                if (feedback) feedback.textContent = error.message;
+                globalThis.toastr?.error(error.message, 'Копирование сводки');
+            } finally { button.disabled = false; }
+        } else if (action === 'summary') await run(() => engine.summarize(settings().prompt));
         else {
             try { await select(action, index); showStatus(''); }
             catch (error) { showStatus(error.message); globalThis.toastr?.error(error.message, 'Сводка диапазона'); }

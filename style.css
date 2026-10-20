@@ -27,13 +27,22 @@
     outline: 2px solid var(--SmartThemeQuoteColor, currentColor);
     outline-offset: -2px;
 }
-.mrs-button .mrs-icon {
+.mrs-button .mrs-icon, .mrs-copy-button .mrs-icon {
     display: block;
     width: 18px;
     height: 18px;
     flex: 0 0 18px;
     pointer-events: none;
 }
+.mrs-copy-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.mrs-copy-footer .mrs-copy-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 40px; width: auto; margin: 0; padding: 8px 12px;
+    border-radius: 10px; font-family: inherit; font-size: 14px; line-height: 1.3;
+    color: var(--SmartThemeBodyColor, currentColor); touch-action: manipulation; cursor: pointer;
+}
+.mrs-copy-feedback { font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+.mrs-copy-button:disabled { opacity: .6; cursor: wait; }
 .mes.mrs-start .mes_text,
 .mes.mrs-end .mes_text {
     box-shadow: inset 3px 0 var(--SmartThemeQuoteColor, currentColor);
@@ -53,4 +62,5 @@
 #mrs-settings button:disabled, .mrs-button:disabled { opacity: .55; cursor: wait; }
 @media (pointer: coarse) {
     .mrs-buttons .mrs-button { min-height: 36px; min-width: 36px; }
+    .mrs-copy-footer .mrs-copy-button { min-height: 44px; }
 }
