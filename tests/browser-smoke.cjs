@@ -57,7 +57,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/') { res.setHeader('Content-Type', 'text/html'); res.end(html); return; }
     if (req.url === '/script.js') {
         res.setHeader('Content-Type', 'text/javascript');
-        res.end(`export const amount_gen=512;export const isGenerating=()=>window.generating;export const setSendButtonState=v=>window.generating=v;export const extractMessageFromData=r=>r.choices[0].message.content;`); return;
+        res.end(`export async function redisplayChat({startIndex=0}={}){document.querySelectorAll("#chat .mes").forEach(el=>{if(Number(el.getAttribute("mesid"))>=startIndex)el.remove()});for(const m of window.testContext.chat.slice(startIndex))window.testContext.addOneMessage(m)};export const amount_gen=512;export const isGenerating=()=>window.generating;export const setSendButtonState=v=>window.generating=v;export const extractMessageFromData=r=>r.choices[0].message.content;`); return;
     }
     if (req.url === '/scripts/chats.js') {
         res.setHeader('Content-Type', 'text/javascript');
@@ -103,15 +103,15 @@ const server = http.createServer(async (req, res) => {
             await messageAction(2, 'end');
             await messageAction(2, 'summary');
             await page.waitForFunction(() => window.testContext.chat.length === 5 && !window.generating);
-            assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [true, true, true, false, true]);
+            assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [true, true, true, true, false]);
             assert.equal(await page.evaluate(() => requests[0][0].content), '  Rules {{char}}\n');
             assert.ok((await page.evaluate(() => requests[0][1].content)).includes('selected {{char}}'));
             assert.ok(!(await page.evaluate(() => requests[0][1].content)).includes('old outside'));
             assert.equal(await page.locator('.mrs-buttons button').count(), 16);
-            const summaryMessage = page.locator('.mes[mesid="4"]');
+            const summaryMessage = page.locator('.mes[mesid="3"]');
             const copyButton = summaryMessage.locator('.mrs-copy-button');
             assert.equal(await copyButton.isVisible(), true, 'copy is directly visible without opening the ellipsis menu');
-            assert.equal(await page.locator('.mes:not([mesid="4"]) .mrs-copy-button').count(), 0);
+            assert.equal(await page.locator('.mes:not([mesid="3"]) .mrs-copy-button').count(), 0);
             const summaryBeforeCopy = await page.evaluate(() => JSON.stringify(testContext.chat));
             await copyButton.click();
             await page.waitForFunction(() => document.querySelector('.mrs-copy-button .mrs-copy-label')?.textContent === 'Скопировано');
@@ -120,23 +120,37 @@ const server = http.createServer(async (req, res) => {
             await page.evaluate(() => {
                 window.realClipboard = navigator.clipboard;
                 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
-                testContext.chat[4].mes = 'Сводка · сообщения #1–#2 (включительно)\n\nFallback summary 🙂';
+                testContext.chat[3].mes = 'Сводка · сообщения #1–#2 (включительно)\n\nFallback summary 🙂';
             });
             await copyButton.click();
             await page.waitForFunction(() => document.querySelector('.mrs-copy-button .mrs-copy-label')?.textContent === 'Скопировано');
             assert.equal(await page.evaluate(() => realClipboard.readText()), 'Fallback summary 🙂');
             assert.equal(await page.locator('.mrs-clipboard-buffer').count(), 0, 'fallback textarea is cleaned up');
-            await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClipboard }); testContext.chat[4].mes = 'Сводка · сообщения #1–#2 (включительно)\n\nDetailed summary {{char}}'; });
+            await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClipboard }); testContext.chat[3].mes = 'Сводка · сообщения #1–#2 (включительно)\n\nDetailed summary {{char}}'; });
             await messageAction(2, 'summary');
             await page.waitForFunction(() => !window.generating);
             assert.equal(await page.evaluate(() => requests.length), 1);
+            assert.equal(await summaryMessage.locator('.mrs-repeat-button').isVisible(), true);
+            await page.fill('#mrs-prompt', '  New rules {{user}}\n');
+            await summaryMessage.locator('.mrs-repeat-button').click();
+            await page.waitForFunction(() => requests.length === 2 && !window.generating);
+            assert.equal(await page.locator('.mrs-copy-footer').count(), 1, 'repeat replaces instead of duplicating');
+            assert.equal(await page.evaluate(() => testContext.chat.length), 5);
+            assert.equal(await page.evaluate(() => requests[1][0].content), '  New rules {{user}}\n');
+            assert.ok(!(await page.evaluate(() => requests[1][1].content)).includes('Detailed summary'));
+            assert.deepEqual(await page.locator('#chat .mes').evaluateAll(nodes => nodes.map(n => Number(n.getAttribute('mesid')))), [0, 1, 2, 3, 4]);
+            assert.equal(await page.locator('.mes[mesid="4"] .mes_text').textContent(), 'new outside');
+            if (width === 390) {
+                fs.mkdirSync(path.join(root, 'artifacts'), { recursive: true });
+                await summaryMessage.screenshot({ path: path.join(root, 'artifacts', 'summary-repeat-1.0.4.png') });
+            }
             await page.click('#mrs-restore');
             await page.waitForFunction(() => !window.generating);
-            assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [false, false, false, false, true]);
+            assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [false, false, false, true, false]);
             await messageAction(2, 'summary');
             await page.waitForFunction(() => !window.generating);
-            assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [true, true, true, false, true]);
-            assert.equal(await page.evaluate(() => requests.length), 1);
+            assert.deepEqual(await page.evaluate(() => testContext.chat.map(m => m.is_system)), [true, true, true, true, false]);
+            assert.equal(await page.evaluate(() => requests.length), 2);
             for (const light of [false, true]) {
                 await page.evaluate(light => {
                     document.body.style.setProperty('--bg', light ? '#fff' : '#222');
@@ -159,13 +173,24 @@ const server = http.createServer(async (req, res) => {
                 const tops = await row.locator('button').evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().top));
                 assert.ok(tops.every(top => Math.abs(top - tops[0]) < 1), 'three buttons should fit on a single row');
             }
+            await page.evaluate(async () => {
+                const { createHost } = await import('/index.js');
+                const core = await import('/script.js');
+                document.querySelectorAll('#chat .mes').forEach(el => { if (Number(el.getAttribute('mesid')) < 4) el.remove(); });
+                await createHost(() => testContext, core, {}).render(testContext.chat[3]);
+            });
+            assert.deepEqual(await page.locator('#chat .mes').evaluateAll(nodes => nodes.map(n => Number(n.getAttribute('mesid')))), [3, 4], 'rendering an unloaded summary cannot duplicate the visible tail');
+            await page.evaluate(async () => {
+                document.querySelectorAll('#chat .mes').forEach(el => el.remove());
+                await (await import('/script.js')).redisplayChat({ startIndex: 0 });
+            });
             await page.evaluate(() => {
                 const m={name:'late',mes:'lazy loaded',extra:{},is_user:false,is_system:false};testContext.chat.push(m);testContext.addOneMessage(m);
             });
             await page.waitForFunction(() => document.querySelectorAll('.mrs-buttons').length === 6);
             await page.reload();
             await page.waitForSelector('#mrs-prompt');
-            assert.equal(await page.inputValue('#mrs-prompt'), '  Rules {{char}}\n');
+            assert.equal(await page.inputValue('#mrs-prompt'), '  New rules {{user}}\n');
             assert.deepEqual(errors, []);
             console.log('PASS browser UI ' + width + 'px: native ellipsis menu, hidden compact actions, flow, restore, duplicates, lazy messages, themes, settings reload');
             await context.close();

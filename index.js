@@ -65,6 +65,10 @@ const ACTION_ICON_PATHS = {
         { d: 'M8 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1M8 3h8' },
         { d: 'M10 7h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z' },
     ],
+    repeat: [
+        { d: 'M20 7a8 8 0 0 0-14-2L3 9m0-5v5h5' },
+        { d: 'M4 17a8 8 0 0 0 14 2l3-4m0 5v-5h-5' },
+    ],
 };
 
 function actionIcon(doc, action) {
@@ -83,7 +87,7 @@ function actionIcon(doc, action) {
 }
 
 export function serializeRange(chat, start, end) {
-    return chat.slice(start, end + 1).map((m, offset) =>
+    return chat.slice(start, end + 1).map((m, offset) => isSummary(m) ? '' :
         `[Сообщение #${start + offset}; роль: ${m.is_user ? 'пользователь' : 'персонаж/служебное'}; имя: ${JSON.stringify(m.name ?? '')}; метка отправки: ${JSON.stringify(m.send_date ?? '')}]\n${m.mes ?? ''}\n\n`,
     ).join('');
 }
@@ -162,16 +166,41 @@ export class SummaryEngine {
         guard();
         if (!verify(saved)) throw Error('Не удалось подтвердить сохранение чата на сервере. Проверьте соединение; повторное нажатие использует уже созданную сводку.');
     }
-    async summarize(prompt) {
+    summaryRange(summary) {
+        const c = this.host.context(), meta = summary?.extra?.[KEY];
+        if (!isSummary(summary)) throw Error('Сводка не найдена.');
+        const resolve = id => {
+            const matches = c.chat.map((m, i) => ({ m, i })).filter(x => x.m.extra?.[KEY]?.id === id);
+            return id && matches.length === 1 ? matches[0].i : -1;
+        };
+        // Legacy summaries predate anchors. Only allow intact, still-selected endpoints.
+        const selected = c.chatMetadata[KEY] ?? {};
+        const start = resolve(meta.startId ?? selected.start), end = resolve(meta.endId ?? selected.end);
+        if (start < 0 || end < start || (!meta.startId && (start !== meta.start || end !== meta.end))
+            || c.chat.slice(start, end + 1).includes(summary)) {
+            throw Error('Исходные границы сводки не найдены. Выберите исходный диапазон заново и создайте сводку.');
+        }
+        return { start, end };
+    }
+    async repeat(prompt, index) {
+        const summary = this.host.context().chat[index];
+        if (!summary || !isSummary(summary)) throw Error('Сводка не найдена.');
+        return this.summarize(prompt, summary);
+    }
+    async summarize(prompt, replacement = null) {
         if (this.busy) throw Error('Операция уже выполняется.');
         this.busy = true;
         try {
             if (typeof prompt !== 'string' || !prompt.trim()) throw Error('Вставьте свой промпт для сводки в настройки.');
-            const c = this.host.context(), { start, end } = this.range();
-            const prefix = c.chat.slice(0, end + 1), guard = this.guardFor(c, prefix);
+            const c = this.host.context(), { start, end } = replacement ? this.summaryRange(replacement) : this.range();
+            const prefix = c.chat.slice(0, end + 1);
+            let guard = this.guardFor(c, c.chat.slice());
             const source = serializeRange(c.chat, start, end);
-            const op = fingerprint(JSON.stringify([prompt, start, end, source]));
-            let summary = c.chat.find(m => isSummary(m) && data(m).operation === op);
+            if (!source) throw Error('В диапазоне нет исходных сообщений.');
+            const op = fingerprint(JSON.stringify([prompt, data(c.chat[start]).id, data(c.chat[end]).id,
+                c.chat.slice(start, end + 1).filter(m => !isSummary(m)).map(stamp)]));
+            let summary = replacement ? null : c.chat.find(m => isSummary(m) && data(m).operation === op);
+            let original;
             if (!summary) {
                 const limits = this.host.limits();
                 const promptTokens = Number(await this.host.count(prompt));
@@ -193,17 +222,39 @@ export class SummaryEngine {
                     name: 'Сводка', is_user: false, is_system: true,
                     send_date: new Date().toISOString(),
                     mes: `Сводка · сообщения #${start}–#${end} (включительно)\n\n` + outputs.join('\n\n---\n\n'),
-                    extra: { type: 'comment', [KEY]: { kind: 'summary', operation: op, start, end, parts: chunks.length, phase: 'ready' } },
+                    extra: { type: 'comment', [KEY]: { kind: 'summary', operation: op, start, end,
+                        startId: data(c.chat[start]).id, endId: data(c.chat[end]).id,
+                        parts: chunks.length, phase: 'ready' } },
                 };
-                c.chat.push(summary);
+                if (replacement) {
+                    original = structuredClone(replacement);
+                    Object.assign(replacement, summary);
+                    summary = replacement;
+                } else c.chat.splice(end + 1, 0, summary);
+                guard = this.guardFor(c, c.chat.slice());
             }
             guard();
             summary.is_system = true;
             // A rendering failure must not hide sources, including on retry.
-            if (data(summary).phase !== 'complete') this.host.render(summary);
             const savedSummary = saved => saved.messages.some(m => m.extra?.[KEY]?.operation === op && m.mes === summary.mes && m.is_system === true);
             const savedPrefix = saved => prefix.every((m, i) => saved.messages[i] && stamp(saved.messages[i]) === stamp(m));
-            await this.persist(guard, saved => savedSummary(saved) && savedPrefix(saved));
+            try {
+                if (data(summary).phase !== 'complete') await this.host.render(summary);
+                guard();
+                await this.persist(guard, saved => savedSummary(saved) && savedPrefix(saved)
+                    && saved.messages[c.chat.indexOf(summary)]?.mes === summary.mes);
+            } catch (error) {
+                if (original) {
+                    Object.assign(summary, original);
+                    try {
+                        const current = this.host.context();
+                        if (chatKey(current) === chatKey(c) && current.chat === c.chat) {
+                            await this.host.save(); await this.host.render(summary);
+                        }
+                    } catch { /* Keep old text locally even if the server is unavailable. */ }
+                }
+                throw error;
+            }
             guard();
             if (data(summary).phase === 'complete' && prefix.every(m => m.is_system === true)) return summary;
             // Save ownership only for messages that were active. Never unhide existing comments.
@@ -327,9 +378,17 @@ export function createHost(context, core, chats, fetcher = globalThis.fetch) {
             return { messages: file.slice(1), metadata: file[0].chat_metadata };
         },
         hide: (start, end, unhide) => chats.hideChatMessageRange(start, end, unhide),
-        render(message) {
+        async render(message) {
             const c = context(), index = c.chat.indexOf(message);
-            if (!document.querySelector(`#chat .mes[mesid="${index}"]`)) c.addOneMessage(message, { showSwipes: false });
+            const first = document.querySelector('#chat .mes[mesid]');
+            const startIndex = Math.min(index, first ? Number(first.getAttribute('mesid')) : index);
+            if (typeof core.redisplayChat !== 'function') throw Error('Требуется SillyTavern с redisplayChat. Обновите SillyTavern.');
+            if (first && index < Number(first.getAttribute('mesid'))) {
+                // redisplayChat removes a tail only when its first ID is already mounted.
+                document.querySelectorAll('#chat .mes[mesid]').forEach(el => el.remove());
+            }
+            // Native renderer rebuilds message IDs and controls after an array insertion.
+            await core.redisplayChat({ startIndex, fade: false });
             if (!document.querySelector(`#chat .mes[mesid="${index}"]`)) throw Error('Не удалось добавить сводку в интерфейс чата. Исходники остаются активны.');
         },
         refresh() {
@@ -422,12 +481,18 @@ export function mountUI(context, engine, run, doc = document) {
                         copy.append(actionIcon(doc, 'copy'));
                         const label = doc.createElement('span'); label.className = 'mrs-copy-label'; label.textContent = 'Копировать';
                         copy.append(label); footer.append(copy);
+                        const repeat = doc.createElement('button');
+                        repeat.type = 'button'; repeat.className = 'menu_button mrs-repeat-button';
+                        repeat.dataset.mrsAction = 'repeat'; repeat.setAttribute('aria-label', 'Повторить сводку');
+                        repeat.append(actionIcon(doc, 'repeat'), doc.createTextNode('Повторить'));
+                        footer.append(repeat);
                         const feedback = doc.createElement('span'); feedback.className = 'mrs-copy-feedback';
                         feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
                         footer.append(feedback); text.after(footer);
                     }
                 }
             } else { menuCopy?.remove(); footer?.remove(); }
+            if (footer) footer.querySelector('.mrs-repeat-button').disabled = engine.busy;
             const id = m.extra?.[KEY]?.id;
             const start = !!id && selection.start === id, end = !!id && selection.end === id;
             el.classList.toggle('mrs-start', start); el.classList.toggle('mrs-end', end);
@@ -479,7 +544,8 @@ export function mountUI(context, engine, run, doc = document) {
                 if (feedback) feedback.textContent = error.message;
                 globalThis.toastr?.error(error.message, 'Копирование сводки');
             } finally { button.disabled = false; }
-        } else if (action === 'summary') await run(() => engine.summarize(settings().prompt));
+        } else if (action === 'repeat') await run(() => engine.repeat(settings().prompt, index));
+        else if (action === 'summary') await run(() => engine.summarize(settings().prompt));
         else {
             try { await select(action, index); showStatus(''); }
             catch (error) { showStatus(error.message); globalThis.toastr?.error(error.message, 'Сводка диапазона'); }

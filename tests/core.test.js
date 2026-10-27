@@ -74,20 +74,80 @@ test('splits a huge Unicode message without dropping or duplicating characters',
     }
 });
 
-test('one summary is saved excluded, then only the prefix is hidden', async () => {
+test('one summary is inserted after the endpoint, then only the prefix is hidden', async () => {
     const f = fixture();
     const prompt = '  MY {{char}} PROMPT\n\n';
     await f.engine.summarize(prompt);
     assert.equal(f.requests.length, 1);
     assert.equal(f.requests[0].prompt, prompt);
-    assert.deepEqual(f.c.chat.slice(0, 4).map(m => m.mes), ['zero', 'one {{char}}', 'two', 'three']);
-    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, true, true, false, true]);
-    assert.equal(f.c.chat[4].name, 'Сводка');
-    assert.equal(f.c.chat[4].extra.type, 'comment');
-    assert.ok(f.c.chat[4].mes.includes('SUMMARY'));
+    assert.deepEqual(f.c.chat.filter(m => m.name !== 'Сводка').map(m => m.mes), ['zero', 'one {{char}}', 'two', 'three']);
+    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, true, true, true, false]);
+    assert.equal(f.c.chat[3].name, 'Сводка');
+    assert.equal(f.c.chat[3].extra.type, 'comment');
+    assert.ok(f.c.chat[3].mes.includes('SUMMARY'));
     await f.engine.summarize(prompt);
     assert.equal(f.requests.length, 1);
     assert.equal(f.c.chat.length, 5);
+});
+
+test('repeat replaces the same summary using its own anchored range and current literal prompt', async () => {
+    const f = fixture();
+    const summary = await f.engine.summarize('old prompt');
+    f.engine.select('start', 4); f.engine.select('end', 4);
+    f.c.chat.unshift({ mes: 'inserted', extra: {}, is_system: true });
+    f.host.generate = async (prompt, text) => { f.requests.push({ prompt, text }); return 'NEW SUMMARY'; };
+    await f.engine.repeat('  new {{char}}\n', f.c.chat.indexOf(summary));
+    assert.equal(f.c.chat.length, 6);
+    assert.equal(f.c.chat[4], summary);
+    assert.equal(summaryForCopy(summary), 'NEW SUMMARY');
+    assert.equal(f.requests[1].prompt, '  new {{char}}\n');
+    assert.ok(f.requests[1].text.includes('one {{char}}'));
+    assert.ok(f.requests[1].text.includes('two'));
+    assert.ok(!f.requests[1].text.includes('three'));
+    assert.deepEqual(f.engine.range(), { start: 5, end: 5 });
+    assert.equal(summary.is_system, true);
+});
+
+test('repeat failure preserves the old summary and source visibility', async () => {
+    const f = fixture(); const summary = await f.engine.summarize('prompt');
+    await f.engine.restore();
+    const before = structuredClone(f.c.chat);
+    f.failGenerate();
+    await assert.rejects(f.engine.repeat('prompt', f.c.chat.indexOf(summary)), /generation failed/);
+    assert.deepEqual(f.c.chat, before);
+});
+
+test('repeat refuses deleted anchors instead of summarizing different messages', async () => {
+    const f = fixture(); const summary = await f.engine.summarize('prompt');
+    f.c.chat.splice(1, 1);
+    await assert.rejects(f.engine.repeat('prompt', f.c.chat.indexOf(summary)), /диапазон|границ/i);
+    assert.equal(f.requests.length, 1);
+});
+
+test('a failed replacement save restores the old summary', async () => {
+    const f = fixture(); const summary = await f.engine.summarize('prompt');
+    const before = structuredClone(f.c.chat);
+    f.host.generate = async () => 'NEW'; f.failSave();
+    await assert.rejects(f.engine.repeat('prompt', f.c.chat.indexOf(summary)), /сохран/i);
+    assert.deepEqual(f.c.chat, before);
+});
+
+test('two repeat clicks cannot generate two replacements', async () => {
+    const f = fixture(); const summary = await f.engine.summarize('prompt');
+    const first = f.engine.repeat('prompt', f.c.chat.indexOf(summary));
+    await assert.rejects(f.engine.repeat('prompt', f.c.chat.indexOf(summary)), /выполняется/i);
+    await first;
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.c.chat.length, 5);
+});
+
+test('repeat render failure restores the old text before hiding anything else', async () => {
+    const f = fixture(); const summary = await f.engine.summarize('prompt');
+    const before = structuredClone(f.c.chat);
+    f.host.generate = async () => 'NEW';
+    f.host.render = () => { throw Error('render failed'); };
+    await assert.rejects(f.engine.repeat('prompt', f.c.chat.indexOf(summary)), /render failed/);
+    assert.deepEqual(f.c.chat, before);
 });
 
 test('generation failure never hides sources', async () => {
@@ -101,8 +161,8 @@ test('a swallowed save failure is detected before hiding', async () => {
     const f = fixture(); f.failSave();
     await assert.rejects(f.engine.summarize('prompt'), /сохран/i);
     assert.equal(f.hideCalls, 0);
-    assert.ok(f.c.chat.slice(0, 4).every(m => !m.is_system));
-    assert.equal(f.c.chat[4].is_system, true);
+    assert.ok(f.c.chat.filter(m => m.name !== 'Сводка').every(m => !m.is_system));
+    assert.equal(f.c.chat[3].is_system, true);
 });
 
 test('switching chats during generation cannot write into the destination', async () => {
@@ -133,7 +193,7 @@ test('restore affects only sources hidden by this extension; summary stays exclu
     const f = fixture(); f.c.chat[0].is_system = true;
     await f.engine.summarize('prompt');
     await f.engine.restore();
-    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, false, false, false, true]);
+    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, false, false, true, false]);
 });
 
 test('anchors track message insertions and reject a deleted endpoint', () => {
@@ -164,7 +224,7 @@ test('long history covers every source character and joins parts in chronologica
     await f.engine.summarize('literal rules');
     assert.ok(f.requests.length > 2);
     assert.equal(f.requests.map(r => r.text).join(''), original);
-    const summary = f.c.chat.at(-1).mes;
+    const summary = f.c.chat[3].mes;
     let offset = 0;
     for (let i = 1; i <= f.requests.length; i++) {
         offset = summary.indexOf(`PART-${i}`, offset);
@@ -200,11 +260,11 @@ test('failed hide persistence rolls back local flags and permits retry using sav
         await save();
     };
     await assert.rejects(f.engine.summarize('prompt'), /сохран/i);
-    assert.deepEqual(f.c.chat.map(m => m.is_system), [false, false, false, false, true]);
+    assert.deepEqual(f.c.chat.map(m => m.is_system), [false, false, false, true, false]);
     failHideSave = false;
     await f.engine.summarize('prompt');
     assert.equal(f.requests.length, 1);
-    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, true, true, false, true]);
+    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, true, true, true, false]);
 });
 
 test('reusing a summary after restoring sources hides them again without another model call', async () => {
@@ -214,7 +274,7 @@ test('reusing a summary after restoring sources hides them again without another
     await f.engine.summarize('prompt');
     assert.equal(f.requests.length, 1);
     assert.equal(f.c.chat.length, 5);
-    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, true, true, false, true]);
+    assert.deepEqual(f.c.chat.map(m => m.is_system), [true, true, true, true, false]);
 });
 
 test('a changed connection configuration aborts before writing the summary', async () => {
@@ -232,4 +292,22 @@ test('copied endpoint IDs require an unambiguous new selection', () => {
     assert.throws(() => f.engine.range(), /начал/i);
     f.engine.select('start', 2);
     assert.deepEqual(f.engine.range(), { start: 2, end: 3 });
+});
+
+test('existing summaries are never fed back into the selected source', () => {
+    const chat = [{ mes: 'first' }, { mes: 'OLD SUMMARY', extra: { [KEY]: { kind: 'summary' } } }, { mes: 'last' }];
+    const text = serializeRange(chat, 0, 2);
+    assert.ok(text.includes('first')); assert.ok(text.includes('last'));
+    assert.ok(!text.includes('OLD SUMMARY'));
+});
+
+test('inserting an earlier summary cannot duplicate a later anchored summary', async () => {
+    const f = fixture();
+    f.engine.select('start', 3); f.engine.select('end', 3);
+    const later = await f.engine.summarize('prompt');
+    f.engine.select('start', 1); f.engine.select('end', 2);
+    await f.engine.summarize('prompt');
+    f.engine.select('start', 4); f.engine.select('end', 4);
+    assert.equal(await f.engine.summarize('prompt'), later);
+    assert.equal(f.requests.length, 2);
 });
